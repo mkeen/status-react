@@ -69,11 +69,9 @@
 
 (defn contact-actions [contact]
   [{:action #(re-frame/dispatch [:show-profile (:whisper-identity contact)])
-    :label  (i18n/label :t/view-profile)}
-   ;; NOTE(goranjovic) - group chat participant removal has been temporarily disabled
-   ;; due to this bug - https://github.com/status-im/status-react/issues/3463
-   #_{:action #(re-frame/dispatch [:remove-group-chat-participants #{(:whisper-identity contact)}])
-      :label  (i18n/label :t/remove-from-chat)}])
+    :label  (i18n/label :t/view-profile)} 
+   {:action #(re-frame/dispatch [:remove-group-chat-participants #{(:whisper-identity contact)}])
+    :label  (i18n/label :t/remove-from-chat)}])
 
 (defn render-contact [contact admin?]
   [react/view

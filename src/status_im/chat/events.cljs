@@ -7,9 +7,12 @@
             [status-im.chat.models :as models]
             [status-im.chat.console :as console]
             [status-im.chat.constants :as chat.constants]
+            [status-im.commands.events.loading :as events.loading]
             [status-im.ui.components.list-selection :as list-selection]
             [status-im.ui.screens.navigation :as navigation]
+            [status-im.ui.screens.group.events :as group.events]
             [status-im.utils.handlers :as handlers]
+            [status-im.utils.contacts :as utils.contacts]
             [status-im.transport.message.core :as transport]
             [status-im.transport.message.v1.protocol :as protocol]
             [status-im.transport.message.v1.public-chat :as public-chat]
@@ -81,36 +84,57 @@
        :data-store/update-message (-> (get-in new-db msg-path) (select-keys [:message-id :user-statuses]))})))
 
 (defn init-console-chat
-  [{:keys [chats] :as db}]
-  (if (chats constants/console-chat-id)
-    {:db db}
-    {:db                      (-> db
-                                  (assoc :current-chat-id constants/console-chat-id)
-                                  (update :chats assoc constants/console-chat-id console/chat))
-     :dispatch                [:add-contacts [console/contact]]
-     :data-store/save-chat    console/chat
-     :data-store/save-contact console/contact}))
+  [{:keys [db] :as cofx}]
+  (when-not (get-in db [:chats constants/console-chat-id])
+    {:db                   (-> db
+                               (assoc :current-chat-id constants/console-chat-id)
+                               (update :chats assoc constants/console-chat-id console/chat))
+     :data-store/save-chat console/chat}))
 
-(handlers/register-handler-fx
-  :init-console-chat
-  (fn [{:keys [db]} _]
-    (init-console-chat db)))
+(defn- add-default-contacts
+  [{:keys [db default-contacts] :as cofx}]
+  (let [new-contacts      (-> {}
+                              (into (map (fn [[id props]]
+                                           (let [contact-id (name id)]
+                                             [contact-id {:whisper-identity contact-id
+                                                          :address          (utils.contacts/public-key->address contact-id)
+                                                          :name             (-> props :name :en)
+                                                          :photo-path       (:photo-path props)
+                                                          :public-key       (:public-key props)
+                                                          :unremovable?     (-> props :unremovable? boolean)
+                                                          :hide-contact?    (-> props :hide-contact? boolean)
+                                                          :pending?         (-> props :pending? boolean)
+                                                          :dapp?            (:dapp? props)
+                                                          :dapp-url         (-> props :dapp-url :en)
+                                                          :bot-url          (:bot-url props)
+                                                          :description      (:description props)}])))
+                                    default-contacts)
+                              (assoc constants/console-chat-id console/contact))
+        existing-contacts (:contacts/contacts db)
+        contacts-to-add   (select-keys new-contacts (set/difference (set (keys new-contacts))
+                                                                    (set (keys existing-contacts))))]
+    (handlers/merge-fx cofx
+                       {:db                       (update db :contacts/contacts merge contacts-to-add)
+                        :data-store/save-contacts (vals contacts-to-add)}
+                       (events.loading/load-commands))))
 
 (handlers/register-handler-fx
   :initialize-chats
-  [(re-frame/inject-cofx :data-store/all-chats)
+  [(re-frame/inject-cofx :get-default-contacts-and-groups)
+   (re-frame/inject-cofx :data-store/all-chats)
    (re-frame/inject-cofx :data-store/inactive-chat-ids)
    (re-frame/inject-cofx :data-store/get-messages)
    (re-frame/inject-cofx :data-store/unviewed-messages)
    (re-frame/inject-cofx :data-store/message-ids)
-   (re-frame/inject-cofx :data-store/get-unanswered-requests)]
+   (re-frame/inject-cofx :data-store/get-unanswered-requests)
+   (re-frame/inject-cofx :data-store/get-local-storage-data)]
   (fn [{:keys [db
                all-stored-chats
                inactive-chat-ids
                stored-unanswered-requests
                get-stored-messages
                stored-unviewed-messages
-               stored-message-ids]} _]
+               stored-message-ids] :as cofx} _]
     (let [chat->message-id->request (reduce (fn [acc {:keys [chat-id message-id] :as request}]
                                               (assoc-in acc [chat-id message-id] request))
                                             {}
@@ -126,11 +150,13 @@
                                                                                   (-> chat-messages keys set))))))
                         {}
                         all-stored-chats)]
-      (-> db
-          (assoc :chats chats
-                 :deleted-chats inactive-chat-ids)
-          init-console-chat
-          (update :dispatch-n conj [:load-default-contacts!])))))
+      (handlers/merge-fx cofx
+                         {:db (assoc db
+                                     :chats chats
+                                     :deleted-chats inactive-chat-ids)}
+                         (init-console-chat)
+                         (group.events/add-default-groups)
+                         (add-default-contacts)))))
 
 (handlers/register-handler-fx
   :browse-link-from-message
