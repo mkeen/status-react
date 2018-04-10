@@ -13,7 +13,8 @@
             [status-im.ui.screens.group.events :as group.events]
             [status-im.utils.handlers :as handlers]
             [status-im.utils.contacts :as utils.contacts]
-            [status-im.transport.message.core :as transport]
+            [status-im.transport.core :as transport]
+            [status-im.transport.message.core :as transport.message]
             [status-im.transport.message.v1.protocol :as protocol]
             [status-im.transport.message.v1.public-chat :as public-chat]
             [status-im.transport.message.v1.group-chat :as group-chat]
@@ -173,7 +174,7 @@
 (defn- send-messages-seen [chat-id message-ids {:keys [db] :as cofx}]
   (when (and (seq message-ids)
              (not (models/bot-only-chat? db chat-id)))
-    (transport/send (protocol/map->MessagesSeen {:message-ids message-ids}) chat-id cofx)))
+    (transport.message/send (protocol/map->MessagesSeen {:message-ids message-ids}) chat-id cofx)))
 
 ;;TODO (yenda) find a more elegant solution for system messages
 (defn- mark-messages-seen
@@ -280,11 +281,20 @@
   (fn [cofx [chat]]
     (models/update-chat chat cofx)))
 
+(defn- remove-transport [chat-id {:keys [db] :as cofx}]
+  (let [{:keys [group-chat public?]} (get-in db [:chats chat-id])]
+    ;; if this is private group chat, we have to broadcast leave and unsubscribe after that
+    (if (and group-chat (not public?))
+      (handlers/merge-fx cofx (transport.message/send (group-chat/GroupLeave.) chat-id))
+      (handlers/merge-fx cofx (transport/unsubscribe-from-chat chat-id)))))
+
 (handlers/register-handler-fx
   :remove-chat
   [re-frame/trim-v]
   (fn [cofx [chat-id]]
-    (models/remove-chat chat-id cofx)))
+    (handlers/merge-fx cofx
+                       (models/remove-chat chat-id)
+                       (remove-transport chat-id))))
 
 (handlers/register-handler-fx
   :remove-chat-and-navigate-home
@@ -292,6 +302,7 @@
   (fn [cofx [chat-id]]
     (handlers/merge-fx cofx
                        (models/remove-chat chat-id)
+                       (remove-transport chat-id)
                        (navigation/replace-view :home))))
 
 (handlers/register-handler-fx
@@ -338,28 +349,16 @@
                          (models/add-group-chat random-id chat-name (:current-public-key db) selected-contacts)
                          (navigation/navigate-to-clean :home)
                          (navigate-to-chat random-id {})
-                         (transport/send (group-chat/GroupAdminUpdate. chat-name selected-contacts) random-id)))))
-
-(defn- broadcast-leave [{:keys [public? chat-id]} cofx]
-  (when-not public?
-    (transport/send (group-chat/GroupLeave.) chat-id cofx)))
-
-(handlers/register-handler-fx
-  :leave-group-chat
-  ;; stop listening to group here
-  (fn [{{:keys [current-chat-id chats] :as db} :db :as cofx} _]
-    (handlers/merge-fx cofx
-                       (models/remove-chat current-chat-id)
-                       (navigation/replace-view :home)
-                       (broadcast-leave (get chats current-chat-id)))))
+                         (transport.message/send (group-chat/GroupAdminUpdate. chat-name selected-contacts) random-id)))))
 
 (handlers/register-handler-fx
   :leave-group-chat?
-  (fn [_ _]
+  [re-frame/trim-v]
+  (fn [_ [chat-id]]
     {:show-confirmation {:title               (i18n/label :t/leave-confirmation)
                          :content             (i18n/label :t/leave-group-chat-confirmation)
                          :confirm-button-text (i18n/label :t/leave)
-                         :on-accept           #(re-frame/dispatch [:leave-group-chat])}}))
+                         :on-accept           #(re-frame/dispatch [:remove-chat-and-navigate-home chat-id])}}))
 
 (handlers/register-handler-fx
   :show-profile

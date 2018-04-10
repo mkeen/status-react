@@ -1,8 +1,7 @@
 (ns status-im.chat.models
   (:require [status-im.ui.components.styles :as styles]
             [status-im.utils.gfycat.core :as gfycat]
-            [status-im.utils.handlers :as handlers]
-            [status-im.transport.core :as transport]))
+            [status-im.utils.handlers :as handlers]))
 
 (defn set-chat-ui-props
   "Updates ui-props in active chat by merging provided kvs into them"
@@ -98,17 +97,16 @@
        (> timestamp removed-from-at)))
 
 (defn remove-chat [chat-id {:keys [db] :as cofx}]
-  (let [{:keys [chat-id group-chat debug?]} (get-in db [:chats chat-id])
-        fx (cond-> {:db (-> db
-                            (update :chats dissoc chat-id)
-                            (update :deleted-chats (fnil conj #{}) chat-id))}
-             (or group-chat debug?)
-             (assoc :data-store/delete-messages chat-id)
-             debug?
-             (assoc :data-store/delete-chat chat-id)
-             (not debug?)
-             (assoc :data-store/deactivate-chat chat-id))]
-    (handlers/merge-fx cofx fx (transport/unsubscribe-from-chat chat-id))))
+  (let [{:keys [chat-id group-chat debug?]} (get-in db [:chats chat-id])]
+    (cond-> {:db (-> db
+                     (update :chats dissoc chat-id)
+                     (update :deleted-chats (fnil conj #{}) chat-id))}
+      (or group-chat debug?)
+      (assoc :data-store/delete-messages chat-id)
+      debug?
+      (assoc :data-store/delete-chat chat-id)
+      (not debug?)
+      (assoc :data-store/deactivate-chat chat-id))))
 
 (defn bot-only-chat? [db chat-id]
   (let [{:keys [group-chat contacts]} (get-in db [:chats chat-id])]

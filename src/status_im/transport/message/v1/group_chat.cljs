@@ -86,7 +86,8 @@
       ;; we have to check if we already have a chat, or it's a new one
       (if-let [{:keys [group-admin contacts] :as chat} (get-in db [:chats chat-id])]
         ;; update for existing group chat
-        (when (= signature group-admin) ;; make sure that admin is the one making changes
+        (when (and (= signature group-admin)  ;; make sure that admin is the one making changes
+                   (not= (set contacts) (set participants))) ;; make sure it's not actually changing something
           (let [{:keys [removed added]} (participants-diff (set contacts) (set participants))
                 admin-name              (or (get-in cofx [db :contacts/contacts group-admin :name])
                                             group-admin)]
@@ -123,7 +124,7 @@
     (let [me                       (:current-public-key db)
           participant-leaving-name (or (get-in db [:contacts/contacts signature :name])
                                        signature)]
-      (when-not (= me signature)
+      (when (get (:chats db) chat-id) ;; chat is present
         (handlers/merge-fx cofx
                            (models.message/receive
                             (models.message/system-message chat-id random-id now
@@ -134,7 +135,7 @@
 (handlers/register-handler-fx
   ::unsubscribe-from-chat
   [re-frame/trim-v]
-  (fn [cofx [chat-id]]
+  (fn [cofx [chat-id]] 
     (transport/unsubscribe-from-chat chat-id cofx)))
 
 (handlers/register-handler-fx
